@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>掲示板</title>
+  <style>
+    body {
+      background-color: #efefef;
+      color: #000;
+      font-family: "MS PGothic", "ＭＳ Ｐゴシック", "Mona", sans-serif;
+      margin: 0;
+      padding: 15px;
+    }
+    .header {
+      border-bottom: 2px solid #707070;
+      padding-bottom: 8px;
+      margin-bottom: 15px;
+    }
+    h1 { font-size: 1.4rem; margin: 0; color: #800000; }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: #fbfbfb;
+      border: 1px solid #ccc;
+      padding: 15px;
+    }
+    .thread-title {
+      font-size: 1.2rem;
+      color: #ff0000;
+      border-bottom: 1px solid #cc0000;
+      padding-bottom: 5px;
+      margin-top: 0;
+    }
+    .res-list { margin-bottom: 25px; }
+    .res-item { margin-bottom: 15px; line-height: 1.4; }
+    .res-header { color: #222; font-size: 0.9rem; }
+    .res-num { font-weight: bold; color: #0000cc; }
+    .res-name { color: #008000; font-weight: bold; }
+    .res-body {
+      margin-top: 4px;
+      padding-left: 15px;
+      font-size: 0.95rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .res-body a { color: #0000cc; }
+    .video {
+      margin: 8px 0 0 15px;
+      position: relative;
+      width: 100%;
+      max-width: 480px;
+      aspect-ratio: 16 / 9;
+    }
+    .video iframe {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      border: 0;
+    }
+    .form-box {
+      background: #e5e5e5;
+      border: 1px solid #aaa;
+      padding: 12px;
+      border-radius: 4px;
+    }
+    .form-title { font-weight: bold; font-size: 0.9rem; margin-bottom: 8px; color: #333; }
+    .input-group { margin-bottom: 8px; }
+    .input-group label { font-size: 0.85rem; display: inline-block; width: 50px; }
+    input[type="text"] {
+      padding: 4px 6px;
+      font-size: 0.9rem;
+      border: 1px solid #999;
+      width: 200px;
+      max-width: 60%;
+    }
+    textarea {
+      width: 100%;
+      height: 80px;
+      padding: 6px;
+      font-size: 0.9rem;
+      border: 1px solid #999;
+      box-sizing: border-box;
+      resize: vertical;
+    }
+    .hint { font-size: 0.75rem; color: #666; margin-top: 4px; }
+    .btn-group { margin-top: 8px; display: flex; gap: 10px; align-items: center; }
+    button {
+      padding: 4px 12px;
+      background: #ddd;
+      border: 1px solid #666;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+    button:hover { background: #ccc; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    #status { font-size: 0.8rem; color: #800000; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <div class="header">
+    <h1>Google</h1>
+  </div>
+
+  <h2 class="thread-title">うんち！</h2>
+
+  <div class="res-list" id="resList">読み込み中...</div>
+
+  <div class="form-box">
+    <div class="form-title">書き込む</div>
+    <div class="input-group">
+      <label for="username">名前:</label>
+      <input type="text" id="username" placeholder="名前（名前#合言葉 でトリップ）">
+    </div>
+    <div class="input-group">
+      <textarea id="message" placeholder="本文（YouTubeのURLを貼ると動画が表示されます）"></textarea>
+      <div class="hint">YouTube の URL を書くと、その下に動画プレーヤーが出ます。</div>
+    </div>
+    <div class="btn-group">
+      <button id="postBtn" onclick="addResponse()">書き込む</button>
+      <button onclick="loadResponses(true)">更新</button>
+      <span id="status"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ▼ GAS をデプロイしたあとに出てくる「ウェブアプリのURL」をここに貼る
+  const API_URL = 'https://script.google.com/macros/s/AKfycbyjU_3lZ8WF7pNo2dFXfKxNGRNcHrmKjKDCjULc4SEAt-32QH0APC4DEzLVqNlwlUTN/exec';
+
+  const POLL_MS = 15000; // 自動更新の間隔
+  let lastSignature = '';
+  let posting = false;
+
+  // ---------- ユーティリティ ----------
+  function escapeHTML(str) {
+    return String(str).replace(/[&<>'"]/g,
+      t => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[t]));
+  }
+
+  function setStatus(msg) {
+    document.getElementById('status').textContent = msg || '';
+  }
+
+  function apiReady() {
+    return /^https:\/\/script\.google\.com\//.test(API_URL);
+  }
+
+  // 端末ごとのID（日付が変わると変わる、5ch風）
+  function getMyId() {
+    let cid = localStorage.getItem('kei_client_id');
+    if (!cid) {
+      cid = Math.random().toString(36).slice(2) + Date.now().toString(36);
+      localStorage.setItem('kei_client_id', cid);
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const s = cid + today;
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return h.toString(36).padStart(7, '0').slice(0, 8);
+  }
+
+  // ---------- YouTube ----------
+  const YT_RE = /(?:youtube\.com\/watch\?(?:[^\s&]*&)*v=|youtu\.be\/|youtube\.com\/shorts\/|youtube\.com\/embed\/|youtube\.com\/live\/)([A-Za-z0-9_-]{11})/g;
+
+  function extractYouTubeIds(text) {
+    const ids = [];
+    let m;
+    YT_RE.lastIndex = 0;
+    while ((m = YT_RE.exec(text)) !== null) {
+      if (!ids.includes(m[1])) ids.push(m[1]);
+    }
+    return ids.slice(0, 3); // 1レスにつき最大3本
+  }
+
+  // エスケープ済みテキスト内のURLをリンクにする
+  function linkify(escaped) {
+    return escaped.replace(/(https?:\/\/[^\s<]+)/g,
+      '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+  }
+
+  // ---------- 描画 ----------
+  function render(list) {
+    const container = document.getElementById('resList');
+    if (list.length === 0) {
+      container.textContent = 'まだ書き込みがありません。最初の書き込みをどうぞ。';
+      return;
+    }
+    container.innerHTML = list.map(res => {
+      const body = String(res.body);
+      const videos = extractYouTubeIds(body).map(id => `
+        <div class="video">
+          <iframe src="https://www.youtube-nocookie.com/embed/${id}"
+            title="YouTube video" loading="lazy"
+            allow="accelerometer; encrypted-media; picture-in-picture"
+            allowfullscreen></iframe>
+        </div>`).join('');
+      return `
+        <div class="res-item">
+          <div class="res-header">
+            <span class="res-num">${escapeHTML(res.num)}</span> ：<span class="res-name">${escapeHTML(res.name)}</span>：${escapeHTML(res.date)} ID:${escapeHTML(res.id)}
+          </div>
+          <div class="res-body">${linkify(escapeHTML(body))}</div>
+          ${videos}
+        </div>`;
+    }).join('');
+  }
+
+  // ---------- 通信 ----------
+  async function loadResponses(force) {
+    if (!apiReady()) {
+      document.getElementById('resList').textContent =
+        'kei.html の API_URL に GAS のウェブアプリURLを貼ってください。';
+      return;
+    }
+    try {
+      const r = await fetch(API_URL, { method: 'GET' });
+      const data = await r.json();
+      if (!data.ok) throw new Error(data.error || '取得に失敗しました');
+      const list = data.res;
+      // 変化があるときだけ描画（動画の再読み込みを防ぐ）
+      const sig = list.length + ':' + (list.length ? list[list.length - 1].num : 0);
+      if (force || sig !== lastSignature) {
+        const wasAtBottom = (window.innerHeight + window.scrollY) >= document.body.scrollHeight - 50;
+        render(list);
+        lastSignature = sig;
+        if (wasAtBottom && sig !== '0:0') window.scrollTo(0, document.body.scrollHeight);
+      }
+      setStatus('');
+    } catch (e) {
+      setStatus('読み込みエラー: ' + e.message);
+    }
+  }
+
+  async function addResponse() {
+    if (posting) return;
+    if (!apiReady()) { alert('先に API_URL を設定してください'); return; }
+
+    const name = document.getElementById('username').value.trim();
+    const msgInput = document.getElementById('message');
+    const body = msgInput.value.trim();
+
+    if (!body) { alert('本文を入力してください'); return; }
+    if (body.length > 1000) { alert('本文は1000文字までです'); return; }
+
+    posting = true;
+    const btn = document.getElementById('postBtn');
+    btn.disabled = true;
+    setStatus('送信中...');
+
+    try {
+      // text/plain で送ると CORS のプリフライトが発生せず、GAS で受け取れる
+      const r = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ name: name, body: body, id: getMyId() })
+      });
+      const data = await r.json();
+      if (!data.ok) throw new Error(data.error || '書き込みに失敗しました');
+      msgInput.value = '';
+      setStatus('');
+      await loadResponses(true);
+      window.scrollTo(0, document.body.scrollHeight);
+    } catch (e) {
+      setStatus('書き込みエラー: ' + e.message);
+    } finally {
+      posting = false;
+      btn.disabled = false;
+    }
+  }
+
+  // 名前欄の内容を覚えておく（合言葉付きの名前はこの端末内のみ）
+  const nameEl = document.getElementById('username');
+  nameEl.value = localStorage.getItem('kei_name') || '';
+  nameEl.addEventListener('change', () => localStorage.setItem('kei_name', nameEl.value));
+
+  loadResponses(true);
+  setInterval(() => { if (!document.hidden) loadResponses(false); }, POLL_MS);
+</script>
+
+</body>
+</html>
